@@ -1,310 +1,112 @@
 # NOMA-Imperfect-CSI-
 NOMA-Imperfect-CSI/ 
+Simulation project for my wireless communications course - looking at how a NOMA (Non-Orthogonal Multiple Access) system holds up when the channel state info (CSI) you're using isn't perfect.
 
-# NOMA Under Imperfect CSI: Power-Allocation Robustness to Channel-Estimation Error
+## Why this project
 
-##Project Overview
+Most of the basic NOMA power allocation stuff you read about assumes you know the channel exactly. That's not realistic - in a real system the receiver is estimating the channel and that estimate has noise in it, so whatever power split you calculated based on it is going to be a little (or a lot) off. I wanted to actually simulate that and see how bad it gets, and whether you can fix it by adjusting the power allocation instead of just eating the loss.
 
-This project studies the performance of a **Non-Orthogonal Multiple Access (NOMA)** communication system when the available **Channel State Information (CSI)** is imperfect.
+So basically two things I'm comparing:
+- fixed power split that never changes no matter how bad the CSI is
+- a "robust" split that shifts more power to the weak user as the CSI error grows
 
-In conventional NOMA systems, power allocation depends on accurate channel information. However, in practical wireless communication systems, channel estimation is affected by noise, interference, mobility, and other environmental factors. These estimation errors can reduce the accuracy of power allocation and degrade system performance.
+## System setup
 
-This project models different levels of CSI estimation error and evaluates their effect on the **sum rate and outage probability**. It also compares **fixed power allocation** with a **robust power-allocation strategy** to determine how performance can be improved under imperfect CSI.
+Two users, one base station, classic NOMA downlink. Base station sends both signals superimposed on top of each other using the same time/frequency:
 
----
+x = sqrt(P*a1)*s1 + sqrt(P*a2)*s2
 
-##  Objectives
+a1 and a2 are the power coefficients (add up to 1), and the weak user always gets more power (a1 > a2) so it can decode its own signal treating the other one as noise. Strong user does SIC (successive interference cancellation) to strip out the weak user's signal first, then decodes its own.
 
-The main objectives of this project are:
+Channels are Rayleigh fading, which is the standard assumption for NLOS mobile links.
 
-1. Model a two-user NOMA communication system.
-2. Generate wireless channels using a Rayleigh fading model.
-3. Introduce configurable channel-estimation error variance.
-4. Simulate NOMA performance under different CSI-error levels.
-5. Calculate the Signal-to-Interference-plus-Noise Ratio (SINR).
-6. Measure the average system sum rate.
-7. Measure the outage probability of each user.
-8. Compare fixed and robust power-allocation strategies.
-9. Study the degradation caused by increasing CSI errors.
-10. Identify the tolerable CSI-error threshold.
+## Modeling the imperfect CSI part
 
----
+This is really the core of the project. The actual channel h_i is not what we know - what we have is an estimate h_i_hat, and the error between them:
 
-## 📡 NOMA System Model
+h_i = h_i_hat + e_i
 
-A base station communicates with two users using the same time and frequency resources.
+where e_i is complex Gaussian, mean zero, variance sigma_e^2. sigma_e^2 = 0 means perfect CSI (the ideal case everyone assumes), and I ramp it up from there to see the effect:
 
-```text
-                 Base Station
-                      |
-              NOMA Superposition
-                 /          \
-                /            \
-        Weak User          Strong User
-        User 1              User 2
-       More Power          Less Power
+0, 0.01, 0.05, 0.10, 0.20, 0.30, 0.50
+
+(these aren't set in stone, I picked them to get a reasonable spread from "basically nothing" to "pretty bad estimation")
+
+## SINR / rate equations
+
+Weak user:
+SINR1 = (P*a1*|h1|^2) / (P*a2*|h1|^2 + N0)
+
+Strong user (after SIC removes user 1's signal):
+SINR2 = (P*a2*|h2|^2) / N0
+
+Rate for each user: R_i = log2(1 + SINR_i), and sum rate is just R1 + R2. I average this over a lot of Monte Carlo channel draws (100k) to smooth out the randomness.
+
+Outage: pick a target rate (I used 1 bit/s/Hz), and count how often a user's actual rate falls under that. Outage probability = outage count / total trials. Did this separately per user since they don't behave the same way.
+
+## Power allocation - fixed vs robust
+
+Fixed allocation is dead simple, just:
+a1 = 0.8, a2 = 0.2
+
+...and it never moves regardless of how bad the CSI gets, which is obviously not great once the error variance climbs.
+
+For the robust version I bump a1 up as sigma_e^2 increases, roughly like this (values below are what I tested, not derived from some formula - more of a heuristic sweep, might revisit this later with an actual optimization):
+
+| CSI error var | a1 (weak) | a2 (strong) |
+|---|---|---|
+| 0.00 | 0.80 | 0.20 |
+| 0.05 | 0.82 | 0.18 |
+| 0.10 | 0.84 | 0.16 |
+| 0.20 | 0.87 | 0.13 |
+| 0.30 | 0.90 | 0.10 |
+| 0.50 | 0.92 | 0.08 |
+
+Idea being: if you're less sure about the channel, hedge by giving the weak user a bit more of a cushion.
+
+## How I actually ran the sim
+
+Okay this part is messier than I'd like to admit. Roughly what happens:
+
+1. set SNR range and basic params
+2. generate Rayleigh channels for both users
+3. loop over CSI error variances (I moved this loop outside the SNR loop at some point because it was faster, originally had it nested the other way)
+4. add the CSI error on top of the channel to get the "estimated" version - actually I think in the code this happens before step 3 even starts, I generate all the error variants up front and just index into them. Need to double check that's not causing reused-noise bugs across SNR values.
+5. run fixed allocation on it, log SINR/rate/outage
+6. loop over SNR values (yes, inside the error loop, I know it's backwards from how I wrote it above)
+7. robust allocation - I originally had this as a totally separate script and only merged it in later, so the way it logs results doesn't quite match the fixed allocation logging format yet
+8. Monte Carlo repeats - this is honestly folded into the channel generation step (I generate 100k draws at once instead of looping 100k times), so it's not really its own separate "step" in the code, more just a big array
+9. dump to CSV
+10. make plots - did this last, after already looking at raw numbers first to sanity check them
+11. threshold calc - forgot to make this part of the main loop, currently a separate script that reads the CSV back in
+
+So the actual step order in `src/noma_simulation.py` doesn't cleanly match a 1-10 list, it's closer to: params → generate all channels/errors up front → loop error variance → loop SNR → both allocations → log → (later, separately) plots → (later still) threshold. If you're reading the code and it looks out of order compared to this readme, the code is right, I just haven't gone back to fix this section.
+
+## Parameters used
+
+| Parameter | Value |
+|---|---|
+| Users | 2 |
+| Channel | Rayleigh fading |
+| SNR range | 0-30 dB |
+| Monte Carlo trials | 100,000 |
+| Fixed a1 / a2 | 0.8 / 0.2 |
+| CSI error variance | 0 to 0.50 (see list above) |
+| Target rate | 1 bit/s/Hz |
+| Metrics | sum rate, outage probability |
+
+## Tools
+
+Python (numpy for the channel gen and math, pandas for storing/organizing results, matplotlib for plots). Wrote it in PyCharm and also ran chunks of it in Colab when I wanted to check plots faster without setting up my laptop.
+
+## Project layout
+
 ```
-
-The transmitted NOMA signal is represented as:
-
-$$
-x = \sqrt{Pa_1}s_1 + \sqrt{Pa_2}s_2
-$$
-
-where:
-
-* \(P\) = Total transmit power
-* \(a_1\) = Power allocation coefficient for User 1
-* \(a_2\) = Power allocation coefficient for User 2
-* \(s_1\), \(s_2\) = User information signals
-
-The power allocation coefficients satisfy:
-
-$$
-a_1+a_2=1
-$$
-
-More power is normally assigned to the weak user:
-
-$$
-a_1>a_2
-$$
-
----
-
-## Imperfect CSI Model
-
-The actual channel is modeled as:
-
-$$
-h_i = \hat{h}_i + e_i
-$$
-
-where:
-
-* \(h_i\) = Actual channel
-* \(\hat{h}_i\) = Estimated channel
-* \(e_i\) = Channel estimation error
-
-The channel estimation error is modeled as a complex Gaussian random variable:
-
-$$
-e_i \sim \mathcal{CN}(0,\sigma_e^2)
-$$
-
-where:
-
-$$
-\sigma_e^2
-$$
-
-is the **CSI-error variance**.
-
-Different values of CSI-error variance are tested to study the robustness of NOMA.
-
-Example:
-
-```text
-CSI Error Variance
-0
-0.01
-0.05
-0.10
-0.20
-0.30
-0.50
-```
-
-A value of zero represents perfect CSI.
-
----
-
-##  SINR Calculation
-
-For the weak user, the SINR is calculated as:
-
-$$
-SINR_1 =
-\frac{Pa_1|h_1|^2}
-{Pa_2|h_1|^2+N_0}
-$$
-
-For the strong user after successful Successive Interference Cancellation (SIC):
-
-$$
-SINR_2 =
-\frac{Pa_2|h_2|^2}
-{N_0}
-$$
-
-where \(N_0\) represents the noise power.
-
-The SINR changes with the actual channel conditions and CSI uncertainty.
-
----
-
-##  Sum Rate
-
-The achievable data rate of each user is calculated using:
-
-$$
-R_i=\log_2(1+SINR_i)
-$$
-
-The total system sum rate is:
-
-$$
-R_{sum}=R_1+R_2
-$$
-
-The average sum rate is obtained using a large number of randomly generated channel realizations.
-
----
-
-## Outage Probability
-
-Outage occurs when the achievable data rate of a user falls below a predefined target rate.
-
-For a target rate \(R_{target}\):
-
-$$
-P_{out} =
-\frac{\text{Number of outage events}}
-{\text{Total number of simulations}}
-$$
-
-The outage probability is calculated separately for both users.
-
-A higher outage probability indicates poorer communication reliability.
-
----
-
-## Power Allocation
-
-### Fixed Power Allocation
-
-The conventional fixed power allocation used in the simulation is:
-
-$$
-a_1=0.8
-$$
-
-$$
-a_2=0.2
-$$
-
-Therefore:
-
-```text
-Weak User  → 80% power
-Strong User → 20% power
-```
-
-The allocation remains unchanged even when CSI becomes inaccurate.
-
-### Robust Power Allocation
-
-In robust allocation, the power coefficients are adjusted according to the CSI-error level.
-
-Example:
-
-| CSI Error Variance | Weak User \(a_1\) | Strong User \(a_2\) |
-| -----------------: | ----------------: | ------------------: |
-|               0.00 |              0.80 |                0.20 |
-|               0.05 |              0.82 |                0.18 |
-|               0.10 |              0.84 |                0.16 |
-|               0.20 |              0.87 |                0.13 |
-|               0.30 |              0.90 |                0.10 |
-|               0.50 |              0.92 |                0.08 |
-
-The purpose of robust allocation is to reduce the performance degradation caused by CSI uncertainty.
-
----
-
-##  Simulation Methodology
-
-The simulation follows these steps:
-
-```text
-Start
-  ↓
-Set SNR and system parameters
-  ↓
-Generate Rayleigh fading channels
-  ↓
-Generate CSI estimation errors
-  ↓
-Create imperfect channel information
-  ↓
-Select fixed power allocation
-  ↓
-Calculate SINR and user rates
-  ↓
-Calculate sum rate and outage
-  ↓
-Select robust power allocation
-  ↓
-Calculate SINR and user rates
-  ↓
-Calculate sum rate and outage
-  ↓
-Repeat Monte Carlo simulations
-  ↓
-Change CSI-error variance
-  ↓
-Change SNR
-  ↓
-Compare fixed and robust allocation
-  ↓
-Generate performance graphs
-  ↓
-Find tolerable CSI-error threshold
-  ↓
-End
-```
-
----
-
-## Simulation Parameters
-
-| Parameter           | Value/Description            |
-| ------------------- | ---------------------------- |
-| Number of Users     | 2                            |
-| Channel Model       | Rayleigh Fading              |
-| SNR Range           | 0–30 dB                      |
-| Monte Carlo Samples | 100,000                      |
-| Fixed Power \(a_1\) | 0.8                          |
-| Fixed Power \(a_2\) | 0.2                          |
-| CSI Error           | Configurable                 |
-| Target Rate         | 1 bit/s/Hz                   |
-| Performance Metrics | Sum Rate, Outage Probability |
-
----
-
-##  Technologies Used
-
-* **Python** — Main simulation language
-* **NumPy** — Numerical computation and random channel generation
-* **Pandas** — Result storage and analysis
-* **Matplotlib** — Performance graphs
-* **Google Colab** — Simulation execution
-* **GitHub** — Source-code and project management
-* **PyCharm** — Development environment
-
----
-
-##  Project Structure
-
-```text
 NOMA-Imperfect-CSI/
-│
 ├── README.md
-│
 ├── requirements.txt
-│
 ├── src/
 │   └── noma_simulation.py
-│
 └── results/
     ├── sum_rate.png
     ├── outage_probability.png
@@ -312,159 +114,47 @@ NOMA-Imperfect-CSI/
     └── results.csv
 ```
 
----
+## Running it
 
-##  How to Run
-
-### Option 1 — Google Colab
-
-Open Google Colab and upload or open the Python source file.
-
-Install the required libraries:
-
-```bash
-pip install numpy pandas matplotlib
+Colab:
 ```
-
-Run:
-
-```bash
+pip install numpy pandas matplotlib
 python src/noma_simulation.py
 ```
 
-The simulation generates the required performance results and graphs.
+Or just open it in PyCharm, install the same 3 packages, hit run, check `results/` for the plots and csv afterward.
 
-### Option 2 — PyCharm
+## What I expected going in (and mostly got)
 
-1. Open the project in PyCharm.
-2. Open `src/noma_simulation.py`.
-3. Install the required Python packages.
-4. Run the Python program.
-5. Check the generated graphs and CSV results.
+As CSI error goes up, the estimated channel gets less reliable, which throws off the power split, which drags SINR down, which drags sum rate down and pushes outage probability up. Fixed allocation should degrade faster than robust since it never adapts. Robust should hold up a bit better but obviously isn't magic - it's still working off the same noisy estimate, just hedging against it.
 
----
+## Plots I generated
 
-##  Expected Results
+- Sum rate vs SNR (different CSI error curves overlaid)
+- Outage probability vs SNR, weak vs strong user
+- Sum rate vs CSI error variance
+- Fixed vs robust comparison
+- How the power coefficients shift as CSI error grows
 
-The simulation is expected to demonstrate the following behavior:
+## Tolerable CSI-error threshold
 
-### With increasing CSI error:
+Wanted to find the max error variance where the sum rate loss stays under some cutoff (I used 10% as a reasonable bar):
 
-```text
-CSI Error ↑
-     ↓
-Channel information becomes inaccurate
-     ↓
-Power allocation becomes less effective
-     ↓
-SINR performance decreases
-     ↓
-Sum Rate decreases
-     ↓
-Outage Probability increases
-```
+Loss(%) = (R_perfect - R_error) / R_perfect * 100
 
-The fixed power-allocation strategy is expected to experience greater performance degradation as CSI uncertainty increases.
+Whatever the largest sigma_e^2 is that still keeps loss under 10%, that's the threshold I'm calling "tolerable." Exact number comes out of the results, didn't want to hardcode a guess here since it depends on the SNR too.
 
-The robust power-allocation strategy is designed to maintain better performance under imperfect CSI.
+## Fixed vs Robust, quick summary
 
----
+| | Fixed | Robust |
+|---|---|---|
+| Power split | constant | adapts to error |
+| Accounts for CSI uncertainty | no | yes |
+| Simplicity | simple | more moving parts |
+| Robustness | lower | higher |
+| High-error behavior | degrades hard | degrades slower |
+| Point of it | baseline to compare against | trying to actually fix the problem |
 
-##  Performance Graphs
+## TL;DR
 
-The project generates the following important graphs:
-
-### 1. Sum Rate vs SNR
-
-Shows how the total NOMA system throughput changes with SNR for different CSI-error levels.
-
-### 2. Outage Probability vs SNR
-
-Shows the reliability of the weak and strong users under different channel conditions.
-
-### 3. Sum Rate vs CSI Error Variance
-
-Shows the degradation in system performance as CSI uncertainty increases.
-
-### 4. Fixed vs Robust Power Allocation
-
-Compares the performance of conventional fixed allocation with the proposed robust allocation.
-
-### 5. Power Allocation vs CSI Error
-
-Shows how the power coefficients are adjusted as CSI uncertainty increases.
-
----
-
-##Tolerable CSI-Error Threshold
-
-The tolerable CSI-error threshold is determined based on an acceptable performance degradation level.
-
-For example, if a maximum **10% sum-rate degradation** is considered acceptable:
-
-$$
-Loss(\%) =
-\frac{R_{perfect}-R_{error}}
-{R_{perfect}}\times100
-$$
-
-The largest CSI-error variance satisfying the selected degradation limit is considered the tolerable CSI-error threshold.
-
-The actual threshold will be obtained from the simulation results.
-
----
-
-##  Fixed vs Robust Allocation
-
-| Feature                          | Fixed Allocation | Robust Allocation        |
-| -------------------------------- | ---------------- | ------------------------ |
-| Power allocation                 | Constant         | Adaptive                 |
-| CSI uncertainty                  | Not considered   | Considered               |
-| Implementation                   | Simple           | More complex             |
-| Robustness                       | Lower            | Higher                   |
-| Performance under high CSI error | Degrades         | Designed to degrade less |
-| Main purpose                     | Baseline         | Improved reliability     |
-
----
-
-## Expected Outcome
-
-The project aims to demonstrate that imperfect CSI can significantly affect NOMA performance. Increasing channel-estimation error is expected to reduce the achievable sum rate and increase outage probability.
-
-The comparison with robust power allocation will show whether adapting the power distribution according to CSI uncertainty can reduce this degradation.
-
-The final simulation results will be used to identify the **maximum tolerable CSI-error variance** for maintaining acceptable NOMA performance.
-
----
-
-## Future Enhancements
-
-The project can be extended by:
-
-* Supporting 4, 8, or more NOMA users.
-* Including imperfect SIC.
-* Implementing optimization-based power allocation.
-* Comparing NOMA with OMA.
-* Testing different fading channels such as Rician fading.
-* Studying user mobility.
-* Introducing machine-learning-based power allocation.
-* Evaluating energy efficiency.
-* Testing the system under different user distances.
-
----
-
-## Project Type
-
-**Type:** Simulation / Wireless Communication / Machine Learning-Data Simulation
-
-**Topic:** NOMA under Imperfect CSI
-
-**Focus:** Power-allocation robustness to channel-estimation error
-
-**Primary Language:** Python
-
----
-
-This project provides a simulation-based study of **NOMA power allocation under imperfect CSI**. By introducing configurable channel-estimation errors, the project measures their impact on sum rate and outage probability.
-
-The comparison between fixed and robust power allocation provides an understanding of how NOMA systems can be made more reliable when accurate channel information is not available. The identified CSI-error threshold can be used as an indicator of the practical robustness of the NOMA system.
+Two-user NOMA sim under Rayleigh fading, with a controllable amount of CSI estimation error layered on top. Compares a fixed 80/20 power split against a power split that adapts as the CSI gets worse, tracking sum rate and outage probability across SNR and error levels. Point is to see how much NOMA performance actually degrades from bad channel estimates, and whether adapting the allocation buys you anything meaningful.
