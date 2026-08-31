@@ -6,10 +6,6 @@
     5          0.00       Fixed      0.80   0.20    1.717609
     5          0.00       Robust     0.80   0.20    1.714931
    10          0.00       Fixed      0.80   0.20    2.908288
-
-Outage Probability
-
-
  SNR (dB)   CSI Error   Allocation    User 1 Outage    User 2 Outage
 ----------------------------------------------------------------------
     0          0.00       Fixed          0.809680        0.993330
