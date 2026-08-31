@@ -2,10 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# ============================================================
-# NOMA UNDER IMPERFECT CSI
-# ============================================================
-
 # Simulation parameters
 NUM_SAMPLES = 100000
 
@@ -21,10 +17,6 @@ FIXED_A2 = 0.20
 
 # Noise power
 NOISE_POWER = 1.0
-
-# ============================================================
-# Channel generation
-# ============================================================
 
 def generate_channels(num_samples, error_variance):
 
@@ -55,10 +47,6 @@ def generate_channels(num_samples, error_variance):
 
     return h1, h2, h1_est, h2_est
 
-
-# ============================================================
-# NOMA simulation
-# ============================================================
 
 def simulate_noma(snr_db, error_variance, a1, a2):
 
@@ -99,9 +87,7 @@ def simulate_noma(snr_db, error_variance, a1, a2):
     return sum_rate, outage1, outage2
 
 
-# ============================================================
-# Robust power allocation
-# ============================================================
+
 
 def robust_allocation(error_variance):
 
@@ -129,9 +115,7 @@ def robust_allocation(error_variance):
     return a1, a2
 
 
-# ============================================================
-# Main simulation
-# ============================================================
+
 
 results = []
 
@@ -180,9 +164,7 @@ for error in CSI_ERRORS:
         ])
 
 
-# ============================================================
-# Save results
-# ============================================================
+
 
 columns = [
     "SNR_dB",
@@ -203,9 +185,6 @@ print("\nSimulation completed.")
 print(df.head())
 
 
-# ============================================================
-# Plot 1: Sum rate vs SNR
-# ============================================================
 
 plt.figure()
 
@@ -231,9 +210,7 @@ plt.legend()
 plt.show()
 
 
-# ============================================================
-# Plot 2: Fixed vs Robust
-# ============================================================
+
 
 selected_error = 0.20
 
@@ -261,9 +238,6 @@ plt.legend()
 plt.show()
 
 
-# ============================================================
-# Plot 3: Outage vs CSI error
-# ============================================================
 
 selected_snr = 20
 
